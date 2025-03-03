@@ -1,4 +1,4 @@
-#etcc-EpubtoCbzConverter
+##etcc-EpubtoCbzConverter
 
 ##紹介
 Epub形式からCBZ形式にファイルをコンバートするためのCLIツールです。
