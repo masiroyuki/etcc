@@ -1,0 +1,13 @@
+[package]
+name = "etcc"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+epub = "1.2.2"
+anyhow = "1.0"
+zip = "2.2.2"
+quick-xml = "0.37.2"
+indicatif = "0.17.11"
+image = "0.25.5"
+clap = { version = "4.5.30", features = ["derive"] }
