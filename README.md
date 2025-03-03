@@ -1,15 +1,18 @@
-##etcc-EpubtoCbzConverter
+# etcc-EpubtoCbzConverter
 
-##紹介
-Epub形式からCBZ形式にファイルをコンバートするためのCLIツールです。
+## 紹介
 
-Epubファイルの画像ファイルを抽出、CBZ形式で保存します。
+Epub形式からCBZ形式にファイルを変換するためのCLIツールです。
+
+Epubファイルの画像を抽出、CBZ形式で保存します。
 xhtmlファイルから推測した順番を元に変換を行うためCBZ形式でも画像の並びを維持できます。
 
-##使い方
+## 使い方
+
 Todo
 
 ##注意事項
+
 完璧な変換は保証できません
 
 ## License
