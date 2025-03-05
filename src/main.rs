@@ -1,42 +1,17 @@
 use clap::Parser;
 use clap::Subcommand;
 use epub::doc::EpubDoc;
-use image::ImageReader;
-use quick_xml::events::Event;
-use quick_xml::Reader;
-use zip::write::SimpleFileOptions;
+use quick_xml::{events::Event, Reader};
 use zip::ZipArchive;
 use std::ffi::OsStr;
-use std::fmt;
-use std::fmt::Display;
-use std::fs;
-use std::io::Cursor;
-use std::io::Read;
-use std::io::Write;
+use std::fmt::{self, Display};
 use std::path::{Path, PathBuf};
 use std::str::{self};
 use std::fs::File;
 use anyhow::{anyhow, Result};
 use zip::write::ZipWriter;
 
-#[derive(Clone,Subcommand,PartialEq)]
-enum BookFileFormat {
-    Cbz,
-    Zip,
-    Epub
-}
-
-impl Display for BookFileFormat {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            BookFileFormat::Cbz => write!(f, "cbz"),
-            BookFileFormat::Zip => write!(f, "zip"),
-            BookFileFormat::Epub => write!(f, "epub"),
-        }
-    }
-}
-
-#[derive(Clone,Subcommand,PartialEq)]
+#[derive(Clone,Subcommand,PartialEq,Debug)]
 enum ExportBookFileFormat {
     Cbz,
     Zip,
@@ -51,34 +26,13 @@ impl Display for ExportBookFileFormat {
     }
 }
 
-
-#[derive(Clone,Subcommand,PartialEq)]
-enum ImageFormat {
-    Webp,
-    Png,
-    Jpeg,
-}
-
-impl Display for ImageFormat {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            ImageFormat::Webp => write!(f, "webp"),
-            ImageFormat::Png => write!(f, "png"),
-            ImageFormat::Jpeg => write!(f, "jpeg"),
-        }
-    }
-}
-
-#[derive(Parser)]
+#[derive(Parser,Debug)]
 struct Args {
     #[arg(help = "ファイルパス")]
     file_path: Vec<String>, //Parse "aaa/xxx.cbz" "bbb/yyy.cbz" -> Vec["aaa/xxx.cbz","bbb/yyy.cbz"]
 
     #[arg(short = 'p', long = "export_path", help = "ファイルの出力先")]
     export_path: Option<String>, //Same Dir
-
-    #[arg(short = 'f', long = "imageformat", help = "画像の出力形式")]
-    export_image_type: Option<String>, //Unchanged
 
     #[arg(short = 'i', long = "fileformat", default_value_t = ("cbz".to_string()), help = "ファイルの出力形式")]
     export_file_type: String, //cbz
@@ -102,15 +56,7 @@ fn main() {
         "zip" => ExportBookFileFormat::Zip,
         _ => ExportBookFileFormat::Cbz
     };
-    let export_image_format= match args.export_image_type {
-        Some(f) => match f.as_str() {
-            "jpeg" => Some(ImageFormat::Jpeg),
-            "png" => Some(ImageFormat::Png),
-            "webp" => Some(ImageFormat::Webp),
-            _ => None
-        },
-        None => None,
-    };
+
     let export_path: Option<&Path> = None;//args.export_path.map_or(None, |f: String| Some(Path::new(f.as_str())));
 
     
@@ -126,7 +72,7 @@ fn main() {
         .to_str().unwrap_or("None");
         
         let book = Book::new(path);
-        match book.convert(&export_file_format, &export_image_format, export_path) {
+        match book.convert(&export_file_format, export_path) {
             Ok(_) => {},
             Err(e) => 
             {
@@ -159,17 +105,15 @@ fn result_drow(idx: usize, len: usize, color: usize, state: &str, file_name: &st
 trait BookTrait {
     fn read_archive(&self) -> Result<ZipArchive<File>,anyhow::Error>;
     fn write_archive<P: AsRef<Path>>(&self, export_path: P) -> Result<ZipWriter<File>,anyhow::Error>;
-    fn change_extension<P: AsRef<Path>>(&self, path: P, new_ext: &str) -> Result<(),anyhow::Error>;
-    fn file_extension<P: AsRef<Path>>(&self, path: P) -> Result<BookFileFormat, anyhow::Error>;
+    fn file_extension_check<P: AsRef<Path>>(&self, path: P) -> Result<(), anyhow::Error>;
     fn validate_folder<P: AsRef<Path>>(&self, path: P) -> Result<(), anyhow::Error>;
     fn validate_file<P: AsRef<Path>>(&self, path: P) -> Result<(), anyhow::Error>;
-    fn image_convert(&self, export_image_format: &ImageFormat, bytes: &Vec<u8>, export_bytes: &mut Vec<u8>) -> Result<(), anyhow::Error>;
-    fn convert<P: AsRef<Path>>(&self, export_file_format: &ExportBookFileFormat, export_image_format: &Option<ImageFormat>, export_path: Option<P>) -> Result<(), anyhow::Error>;
+    fn convert<P: AsRef<Path>>(&self, export_file_format: &ExportBookFileFormat, export_path: Option<P>) -> Result<(), anyhow::Error>;
 }
 
 trait EpubTrait {
     fn fetch_image_path(&self) -> Result<Vec<String>,anyhow::Error>;
-    fn epub_to_archive_file(&self, image_path: Vec<String>, rzip: &mut ZipArchive<File>, wzip: &mut ZipWriter<File>, export_image_format: &Option<ImageFormat>) -> Result<(), anyhow::Error>;
+    fn epub_to_archive_file(&self, image_path: Vec<String>, rzip: &mut ZipArchive<File>, wzip: &mut ZipWriter<File>) -> Result<(), anyhow::Error>;
 }
 
 struct Book{
@@ -197,26 +141,18 @@ impl BookTrait for Book {
         Ok(wzip)
     }
 
-    fn change_extension<P: AsRef<Path>>(&self, path: P, new_ext: &str) -> Result<(),anyhow::Error> {
+    fn file_extension_check<P: AsRef<Path>>(&self, path: P) -> Result<(), anyhow::Error> {
         let path = path.as_ref();
-        let mut path_buf = path.to_path_buf();
-        path_buf.set_extension(new_ext);
-        fs::rename(path, path_buf)?;
-        Ok(())
-    }
 
-    fn file_extension<P: AsRef<Path>>(&self, path: P) -> Result<BookFileFormat, anyhow::Error> {
-        let path = path.as_ref();
         if let Some(x) = path.extension() {
             if let Some(str) = x.to_str() {
                 match str {
-                    "cbz" => return  Ok(BookFileFormat::Cbz),
-                    "epub" => return Ok(BookFileFormat::Epub),
-                    "zip" => return Ok(BookFileFormat::Zip),
+                    "epub" => return Ok(()),
                     _ => return Err(anyhow!("非対応の拡張子です")),
                 }
             }
         }
+
         return Err(anyhow!("拡張子が特定できませんでした"))
     }
 
@@ -251,20 +187,7 @@ impl BookTrait for Book {
       Ok(())
     }
 
-    fn image_convert(&self, export_image_format: &ImageFormat, bytes: &Vec<u8>, export_bytes: &mut Vec<u8>) -> Result<(), anyhow::Error> {
-        let img = ImageReader::new(Cursor::new(bytes)).with_guessed_format()?.decode()?;
-        let eif = match export_image_format {
-            ImageFormat::Webp => image::ImageFormat::WebP,
-            ImageFormat::Png => image::ImageFormat::Png,
-            ImageFormat::Jpeg => image::ImageFormat::Jpeg,
-        };  
-        
-        img.write_to(&mut Cursor::new(export_bytes), eif,)?;
-
-        Ok(())
-    }
-
-    fn convert<P: AsRef<Path>>(&self, export_file_format: &ExportBookFileFormat, export_image_format: &Option<ImageFormat>, export_path: Option<P>) -> Result<(), anyhow::Error> {
+    fn convert<P: AsRef<Path>>(&self, export_file_format: &ExportBookFileFormat, export_path: Option<P>) -> Result<(), anyhow::Error> {
          
         //出力先ディレクトリの設定
         let mut ep = self.book_file_path.to_path_buf();
@@ -277,90 +200,34 @@ impl BookTrait for Book {
         self.validate_folder(&ep)?;
         self.validate_file(&self.book_file_path)?;
 
-        //読み込みファイルのフォーマットを取得
-        let extension = self.file_extension(&self.book_file_path)?;
+        //ファイルのフォーマット
+        let _ = self.file_extension_check(&self.book_file_path)?;
 
-        //コンバート
-        let file_name = match self.book_file_path.file_stem() {
-            Some(f) => match f.to_str() {
-                Some(f) => f,
-                None => return Err(anyhow!("")),
+        let file_name = match self.book_file_path.file_stem(){
+            Some(t) => match t.to_str() {
+                Some(s) => s,
+                None => "",
             },
-            None => return Err(anyhow!("")),
+            None => ""
         };
 
-        let mut rzip = self.read_archive()?;
+        if file_name.is_empty() {
+            return Err(anyhow!("ファイル名を取得できません"));
+        }
+        
+        let mut rzip = self.read_archive()?; 
 
         let bind = format!("{}.{}",&file_name,export_file_format.to_string());
         let save_path = ep.join(bind);
         let mut wzip = self.write_archive(&save_path)?;
 
-        if extension == BookFileFormat::Epub {
-            //Epubの処理
-            let image_path_list = self.fetch_image_path()?;
-            self.epub_to_archive_file(image_path_list,&mut rzip,&mut wzip,export_image_format)?;
-        } else if extension == BookFileFormat::Cbz || extension == BookFileFormat::Zip  {
-            //ZIP,CBR
-            let mut file_index: i32 = 0;
-            let mut buf = Vec::new();
-            let mut buf2 = Vec::new();
-
-            for rzip_index in 0..rzip.len() {
-                buf.clear();
-                buf2.clear();
-
-                let options = SimpleFileOptions::default();
-                let mut zip_file = match rzip.by_index(rzip_index){
-                    Ok(f) => f,
-                    Err(_) => continue,
-                };
-
-                let zip_file_mangled_name = &zip_file.mangled_name();
-                let zip_file_name = zip_file_mangled_name.file_stem()
-                .map_or("", |f| f.to_str().unwrap_or(""));
-                let zip_file_extension = zip_file_mangled_name.extension()
-                .map_or("", |f| f.to_str().unwrap_or(""));
-
-
-                //拡張子を確認して要否を判定
-                let mut is_image_format_convert = false;
-                if let Some(ref x) = &export_image_format {
-                    is_image_format_convert = x.to_string() != zip_file_extension;
-                };
-
-                if is_image_format_convert{
-                    let eif = match &export_image_format{
-                        Some(f) => f,
-                        None => continue,
-                    };
-                    match zip_file.read_to_end(&mut buf) {
-                        Ok(_) => (),
-                        Err(_) => continue,
-                    };
-
-                    match self.image_convert(&eif,&buf,&mut buf2) {
-                        Ok(_) => (),
-                        Err(_) => continue,
-                    };
-
-                    let file_name = format!("{}.{}",zip_file_name , eif.to_string());
-                    wzip.start_file(file_name, options)?;
-                    wzip.write_all(&buf2)?;
-
-                } else {
-                    //RAWコピー
-                    let file_name = format!("{}.{}",zip_file_name , zip_file_extension);
-                    match wzip.raw_copy_file_rename(zip_file,&file_name){
-                        Ok(_) => (),
-                        Err(_) => continue,
-                    };
-                }
-
-                file_index += 1;
-            }
-        }
+        //Epubの処理
+        let image_path_list = self.fetch_image_path()?;
+        self.epub_to_archive_file(image_path_list,&mut rzip,&mut wzip)?;
 
         wzip.finish()?;
+
+        //
 
         Ok(())
     }
@@ -435,27 +302,21 @@ impl EpubTrait for Book {
         return Ok(image_path_list);
     }
 
-    fn epub_to_archive_file(&self, image_path: Vec<String>, rzip: &mut ZipArchive<File>, wzip: &mut ZipWriter<File>, export_image_format: &Option<ImageFormat>) -> Result<(), anyhow::Error> {
-        let mut file_index: usize = 0;
+    fn epub_to_archive_file(&self, image_path: Vec<String>, rzip: &mut ZipArchive<File>, wzip: &mut ZipWriter<File>) -> Result<(), anyhow::Error> {
         let mut image_path = image_path.clone();
-        let options = SimpleFileOptions::default();
-        let mut buf = Vec::new();
-        let mut buf2: Vec<u8> = Vec::new();
         let mut image_path_index = Vec::new();
+
         for i in 0..(image_path.len() - 1) {
             image_path_index.push(i);
         }
 
         for rzip_index in 0..rzip.len() {
-            let mut zip_file = rzip.by_index(rzip_index)?;
+            let zip_file = rzip.by_index(rzip_index)?;
             let zip_file_mangled_name = &zip_file.mangled_name();
             let zip_file_name = zip_file_mangled_name.file_name()
             .map_or("", |f| f.to_str().unwrap_or(""));
 
-            //ここでepub関数に分離
             for idx in 0..(image_path.len() - 1) {
-                buf.clear();
-                buf2.clear();
                 
                 let epub_path = Path::new(&image_path[idx]);
                 let epub_file_name = epub_path.file_name()
@@ -466,59 +327,13 @@ impl EpubTrait for Book {
                 //ファイル名が一致した場合ZIPアーカイブに抽出する
                 if zip_file_name == epub_file_name{
 
-                    //画像変換の要否を判定
-                    let mut is_image_format_convert = false;
-                    if let Some(ref x) = &export_image_format {
-                        is_image_format_convert = x.to_string() != epub_file_ext;
+                    //RAWコピー
+                    let file_name = format!("{}.{}",image_path_index[idx] , epub_file_ext.to_string());
+                    match wzip.raw_copy_file_rename(zip_file,&file_name){
+                        Ok(_) => (),
+                        Err(_) => break,
                     };
 
-                    if is_image_format_convert {
-                        //画像変換後にZIPに格納
-                        let option_ext = match export_image_format {
-                            Some(ref f) => f,
-                            None => break,
-                        };
-
-                        let _ = zip_file.read_to_end(&mut buf)?;
-    
-                        match self.image_convert(&option_ext,&buf,&mut buf2){
-                            Ok(_) => (),
-                            Err(e) => {
-                                println!("{e}");
-                                break;
-                            },
-                        };
-                        
-                        let file_name = format!("{}.{}", image_path_index[idx] , option_ext.to_string());
-                        match wzip.start_file(&file_name, options){
-                            Ok(_) => (),
-                            Err(e) => {
-                                println!("{e}");
-                                break;
-                            },
-                        };
-                        
-                        match wzip.write_all(&buf2){
-                            Ok(_) => (),
-                            Err(e) => {
-                                println!("{e}");
-                                break;
-                            },
-                        };
-
-                        wzip.flush()?;
-                        
-                        println!("Write:{file_name}")
-                    } else {
-                        //RAWコピー
-                        let file_name = format!("{}.{}",image_path_index[idx] , epub_file_ext.to_string());
-                        match wzip.raw_copy_file_rename(zip_file,&file_name){
-                            Ok(_) => (),
-                            Err(_) => break,
-                        };
-                    }
-                    
-                    file_index += 1;
                     image_path.remove(idx);
                     image_path_index.remove(idx);
                     break
