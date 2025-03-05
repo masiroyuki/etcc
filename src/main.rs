@@ -57,7 +57,11 @@ fn main() {
         _ => ExportBookFileFormat::Cbz
     };
 
-    let export_path: Option<&Path> = None;//args.export_path.map_or(None, |f: String| Some(Path::new(f.as_str())));
+
+    let export_path: Option<&Path> = match args.export_path{
+        Some(ref t) => Some(Path::new(t)),
+        None => None,
+    };
 
     let mut res_log: Vec<String> = Vec::new();
     
