@@ -59,6 +59,7 @@ fn main() {
 
     let export_path: Option<&Path> = None;//args.export_path.map_or(None, |f: String| Some(Path::new(f.as_str())));
 
+    let mut res_log: Vec<String> = Vec::new();
     
     for path in &args.file_path{
         let mut error = false;
@@ -89,16 +90,20 @@ fn main() {
             succount += 1;
         }
 
-        result_drow(idx, args.file_path.len(), color, state, &file_name, &error_msg);
+        res_log.push(result_format(idx, args.file_path.len(), color, state, &file_name, &error_msg));
         idx += 1;
+    }
+
+    for res_str in res_log {
+        println!("{}", res_str);
     }
 
     println!("[Finished!! \x1b[32mSuccess\x1b[m:{} \x1b[31mError\x1b[m:{} ExitStatus:{}]", succount, errcount, state);
    
 }
 
-fn result_drow(idx: usize, len: usize, color: usize, state: &str, file_name: &str, msg:&str){
-    println!("#{}/{} \x1b[3{}m{}\x1b[m {} {}", idx, len, color, state, file_name, msg);
+fn result_format(idx: usize, len: usize, color: usize, state: &str, file_name: &str, msg:&str) -> String {
+    format!("#{}/{} \x1b[3{}m{}\x1b[m {} {}", idx, len, color, state, file_name, msg)
 }
 
 
