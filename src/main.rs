@@ -27,7 +27,6 @@ impl Display for ExportBookFileFormat {
     }
 }
 
-//todo add serch epub file mode 
 #[derive(Parser,Debug)]
 struct Args {
     #[arg(help = "ファイルパス")]
@@ -36,10 +35,13 @@ struct Args {
     #[arg(short = 'p', long = "export_path", help = "ファイルの出力先")]
     export_path: Option<String>, //Same Dir
 
+    #[arg(short = 'y', long = "yes", help = "確認のスキップ")]
+    check_skip: bool, 
+
     #[arg(short = 'i', long = "fileformat", default_value_t = ("cbz".to_string()), help = "ファイルの出力形式")]
     export_file_type: String, //cbz
 
-    #[arg(short = 'd',  default_value_t = false ,help = "変換前のファイルを削除")]
+    #[arg(short = 'd',  default_value_t = false ,help = "変換前のファイルを削除")] //Todo 未実装
     delete_file: bool, //False
 
 }
@@ -69,38 +71,40 @@ fn main() {
 
     let _ = fetch_epub_files(args.path,&mut book);
     
-    //check convert start?
     let book_len = book.len();
     if book_len == 0 {
-        println!("ファイルが見つからないため処理を終了します");
+        println!("ファイルが見つかりません 処理を中断します");
         return
-    } 
-
-    for b in &book {
-        println!("#{}/{} {}.{}", idx1, book_len, b.file_stem, b.file_extension);
-        idx1 += 1;
     }
-    
-    println!("以下のファイルを変換しますか？ [y/n]");
 
-    let mut ans = String::new();
-    loop {
-        stdin().read_line(&mut ans).ok();
-        let res = ans.trim_end();
-
-        match res {
-            "y" =>  break,
-            "n" => {
-                println!("処理を中断します");
-                return;
-            }
-            _ => {}
+    if !args.check_skip {
+        for b in &book {
+            println!("#{}/{} {}.{}", idx1, book_len, b.file_stem, b.file_extension);
+            idx1 += 1;
         }
+        
+        println!("以下のファイルを変換しますか？ [y/n]");
+    
+        let mut ans = String::new();
+        loop {
+            stdin().read_line(&mut ans).ok();
+            let res = ans.trim_end();
+    
+            match res {
+                "y" =>  break,
+                "n" => {
+                    println!("処理を中断します");
+                    return;
+                }
+                _ => {}
+            }
+    
+            println!("y,nで入力してください [y/n]");
+            ans.clear();
+        } 
+    }
 
-        println!("y,nで入力してください [y/n]");
-        ans.clear();
-    } 
-
+    //変換
     for b in &book{
         let mut error = false;
         let mut state = "Success";
@@ -259,7 +263,7 @@ impl BookTrait for Book {
         let path = path.as_ref();
         //フォルダが存在するか
         if !path.exists() {
-            return Err(anyhow!("フォルダが存在しません"))
+            return Err(anyhow!("出力先のフォルダが見つかりません"))
         }
 
         //このパスがフォルダなのか確認
@@ -327,7 +331,6 @@ impl EpubTrait for Book {
             match res {
                 //xml
                 Ok(bytes) => {
-                        
                     //xmlパースして画像パスを取得する
                     let xml = str::from_utf8(&bytes)?;
                     let mut reader = Reader::from_str(xml);
