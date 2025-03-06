@@ -5,6 +5,7 @@ use quick_xml::{events::Event, Reader};
 use zip::ZipArchive;
 use std::ffi::OsStr;
 use std::fmt::{self, Display};
+use std::io::stdin;
 use std::path::{Path, PathBuf};
 use std::str::{self};
 use std::fs::File;
@@ -26,10 +27,11 @@ impl Display for ExportBookFileFormat {
     }
 }
 
+//todo add serch epub file mode 
 #[derive(Parser,Debug)]
 struct Args {
     #[arg(help = "ファイルパス")]
-    file_path: Vec<String>, //Parse "aaa/xxx.cbz" "bbb/yyy.cbz" -> Vec["aaa/xxx.cbz","bbb/yyy.cbz"]
+    path: Vec<String>, //Parse "aaa/xxx.epub" "bbb/yyy.epub" -> Vec["aaa/xxx.epub","bbb/yyy.epub"]
 
     #[arg(short = 'p', long = "export_path", help = "ファイルの出力先")]
     export_path: Option<String>, //Same Dir
@@ -46,10 +48,13 @@ fn main() {
 
     let args = Args::parse();
 
-    let mut idx = 1;
+    let mut idx1 = 1;
+    let mut idx2 = 1;
     let mut succount = 0;
     let mut errcount = 0;
-    let state = 0;
+    let mut state = "0";
+    let mut book = Vec::new();
+    let mut res_log: Vec<String> = Vec::new();
 
     let export_file_format= match args.export_file_type.as_str() {
         "cbz" => ExportBookFileFormat::Cbz,
@@ -57,27 +62,52 @@ fn main() {
         _ => ExportBookFileFormat::Cbz
     };
 
-
     let export_path: Option<&Path> = match args.export_path{
         Some(ref t) => Some(Path::new(t)),
         None => None,
     };
 
-    let mut res_log: Vec<String> = Vec::new();
+    let _ = fetch_epub_files(args.path,&mut book);
     
-    for path in &args.file_path{
+    //check convert start?
+    let book_len = book.len();
+    if book_len == 0 {
+        println!("ファイルが見つからないため処理を終了します");
+        return
+    } 
+
+    for b in &book {
+        println!("#{}/{} {}.{}", idx1, book_len, b.file_stem, b.file_extension);
+        idx1 += 1;
+    }
+    
+    println!("以下のファイルを変換しますか？ [y/n]");
+
+    let mut ans = String::new();
+    loop {
+        stdin().read_line(&mut ans).ok();
+        let res = ans.trim_end();
+
+        match res {
+            "y" =>  break,
+            "n" => {
+                println!("処理を中断します");
+                return;
+            }
+            _ => {}
+        }
+
+        println!("y,nで入力してください [y/n]");
+        ans.clear();
+    } 
+
+    for b in &book{
         let mut error = false;
         let mut state = "Success";
         let mut color = 2;
         let mut error_msg = "".to_string();
 
-        let path = Path::new(path);
-        let file_name = path.file_name()
-        .unwrap_or(OsStr::new("None"))
-        .to_str().unwrap_or("None");
-        
-        let book = Book::new(path);
-        match book.convert(&export_file_format, export_path) {
+        match b.convert(&export_file_format, export_path) {
             Ok(_) => {},
             Err(e) => 
             {
@@ -94,8 +124,8 @@ fn main() {
             succount += 1;
         }
 
-        res_log.push(result_format(idx, args.file_path.len(), color, state, &file_name, &error_msg));
-        idx += 1;
+        res_log.push(result_format(idx2, book_len, color, state, &b.file_stem, &error_msg));
+        idx2 += 1;
     }
 
     for res_str in res_log {
@@ -104,6 +134,44 @@ fn main() {
 
     println!("[Finished!! \x1b[32mSuccess\x1b[m:{} \x1b[31mError\x1b[m:{} ExitStatus:{}]", succount, errcount, state);
    
+}
+
+fn fetch_epub_files<T: std::convert::AsRef<OsStr>>(path:Vec<T>, book:&mut Vec<Book>) -> Result<(),anyhow::Error> {
+
+    for s in &path{
+        let p = Path::new(s);
+
+        if p.exists() {
+            if p.is_file(){
+                if let Some(x ) = p.extension() {
+                    if x == "epub" {
+                        if let Ok(b) = Book::new(p) {
+                            book.push(b);
+                        };
+                    }
+                }
+                continue;
+            } else if p.is_dir(){
+                
+                let pt = p.read_dir()
+                .map(|read_dir| 
+                    read_dir.filter_map(
+                        |dir_entry|{
+                        let entry = dir_entry.ok()?;
+                        Some(entry.path())
+                        }
+                    ).collect()
+                );
+
+               if let Ok(res) = pt {
+                fetch_epub_files(res, book).ok();
+               }
+
+            }
+        }
+    }
+
+    Ok(())
 }
 
 fn result_format(idx: usize, len: usize, color: usize, state: &str, file_name: &str, msg:&str) -> String {
@@ -116,7 +184,6 @@ trait BookTrait {
     fn write_archive<P: AsRef<Path>>(&self, export_path: P) -> Result<ZipWriter<File>,anyhow::Error>;
     fn file_extension_check<P: AsRef<Path>>(&self, path: P) -> Result<(), anyhow::Error>;
     fn validate_folder<P: AsRef<Path>>(&self, path: P) -> Result<(), anyhow::Error>;
-    fn validate_file<P: AsRef<Path>>(&self, path: P) -> Result<(), anyhow::Error>;
     fn convert<P: AsRef<Path>>(&self, export_file_format: &ExportBookFileFormat, export_path: Option<P>) -> Result<(), anyhow::Error>;
 }
 
@@ -127,12 +194,35 @@ trait EpubTrait {
 
 struct Book{
     book_file_path: PathBuf,
+    file_stem: String,
+    file_extension: String
 }
 
-impl Book {
-    fn new<P: AsRef<Path>>(path: P) -> Self{
+impl Book{
+    fn new<P: AsRef<Path>>(path: P) -> Result<Self, anyhow::Error>{
         let path = path.as_ref();
-        Book {book_file_path: path.to_path_buf()}
+
+        //ファイルが存在するか
+        if !path.exists() {
+            return Err(anyhow!("ファイルが存在しません"))
+        }
+
+        //このパスがファイルなのか確認
+        if !path.is_file() {
+            return Err(anyhow!("指定したパスはファイルではありません"))
+        }
+
+        let file_extension = path.extension().map_or(
+            Err(anyhow!("ファイルの拡張子が取得できません")), |f| {
+                f.to_str().map_or(
+                    Err(anyhow!("str型への変換に失敗しました")),|x| Ok(x.to_string()))})?;
+
+        let file_stem = path.file_stem().map_or(
+            Err(anyhow!("ファイル名が取得できません")), |f| {
+                f.to_str().map_or(
+                    Err(anyhow!("str型への変換に失敗しました")),|x| Ok(x.to_string()))})?;
+
+        Ok(Book {book_file_path: path.to_path_buf(), file_stem, file_extension})
     }
 }
 
@@ -180,22 +270,6 @@ impl BookTrait for Book {
         Ok(())
     }
 
-    fn validate_file<P: AsRef<Path>>(&self, path: P) -> Result<(), anyhow::Error> {
-        
-        let path = path.as_ref();
-        //ファイルが存在するか
-        if !path.exists() {
-            return Err(anyhow!("ファイルが存在しません"))
-        }
-
-        //このパスがファイルなのか確認
-        if !path.is_file() {
-            return Err(anyhow!("指定したパスはファイルではありません"))
-        }
-    
-      Ok(())
-    }
-
     fn convert<P: AsRef<Path>>(&self, export_file_format: &ExportBookFileFormat, export_path: Option<P>) -> Result<(), anyhow::Error> {
          
         //出力先ディレクトリの設定
@@ -207,26 +281,13 @@ impl BookTrait for Book {
         }
         
         self.validate_folder(&ep)?;
-        self.validate_file(&self.book_file_path)?;
 
         //ファイルのフォーマット
         let _ = self.file_extension_check(&self.book_file_path)?;
-
-        let file_name = match self.book_file_path.file_stem(){
-            Some(t) => match t.to_str() {
-                Some(s) => s,
-                None => "",
-            },
-            None => ""
-        };
-
-        if file_name.is_empty() {
-            return Err(anyhow!("ファイル名を取得できません"));
-        }
         
         let mut rzip = self.read_archive()?; 
 
-        let bind = format!("{}.{}",&file_name,export_file_format.to_string());
+        let bind = format!("{}.{}",&self.file_stem,export_file_format.to_string());
         let save_path = ep.join(bind);
         let mut wzip = self.write_archive(&save_path)?;
 
