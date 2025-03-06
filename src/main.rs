@@ -192,8 +192,9 @@ trait BookTrait {
 }
 
 trait EpubTrait {
-    fn fetch_image_path(&self) -> Result<Vec<String>,anyhow::Error>;
-    fn epub_to_archive_file(&self, image_path: Vec<String>, rzip: &mut ZipArchive<File>, wzip: &mut ZipWriter<File>) -> Result<(), anyhow::Error>;
+    fn fetch_image_path(&self) -> Result<Vec<PathBuf>,anyhow::Error>;
+    fn xml_get_image_path(&self, bytes:Vec<u8>, image_path_list: &mut Vec<PathBuf>) -> Result<(),anyhow::Error>;
+    fn epub_to_archive_file(&self, image_path: Vec<PathBuf>, rzip: &mut ZipArchive<File>, wzip: &mut ZipWriter<File>) -> Result<(), anyhow::Error>;
 }
 
 struct Book{
@@ -226,9 +227,12 @@ impl Book{
                 f.to_str().map_or(
                     Err(anyhow!("str型への変換に失敗しました")),|x| Ok(x.to_string()))})?;
 
+        //ここでファイル一覧を取る？
+
         Ok(Book {book_file_path: path.to_path_buf(), file_stem, file_extension})
     }
 }
+
 
 impl BookTrait for Book {
 
@@ -309,8 +313,48 @@ impl BookTrait for Book {
 } 
 
 impl EpubTrait for Book {
-    fn fetch_image_path(&self) -> Result<Vec<String>,anyhow::Error> {
+    fn xml_get_image_path(&self, bytes:Vec<u8> , image_path_list: &mut Vec<PathBuf>) -> Result<(),anyhow::Error> {
+
+        let mut buf = Vec::new();
+        let target_name = b"image";
+        let target_name2 = b"xlink:href";
+    
+        //xmlパースして画像パスを取得する
+        let xml = str::from_utf8(&bytes)?;
+        let mut reader = Reader::from_str(xml);
+        reader.config_mut().expand_empty_elements = true;
+    
+            loop {
+                let x = match reader.read_event_into(&mut buf) {
+                    Ok(Event::Eof) => break,
+                    Ok(Event::Start(e)) => e,
+                    _ => continue,
+                    };
+    
+                    //イメージのパスを探す
+                    if x.name().local_name().as_ref() == target_name {
+                        for attr in x.attributes() {
+                            match attr {
+                                Ok(attr) => {
+                                    if &attr.key.as_ref() == target_name2 {
+                                        println!("FindImage: {:?}",str::from_utf8(&attr.value)?);
+                                        image_path_list.push(Path::new(str::from_utf8(&attr.value.into_owned())?).to_path_buf());
+                                    }
+                                }
+                                Err(e) => println!("Error: {:?}", e)
+                            }
+                        }
+                    }
+                    
+                buf.clear();
+            }
+    
+            Ok(())
+    }
+
+    fn fetch_image_path(&self) -> Result<Vec<PathBuf>,anyhow::Error> {
         let doc = EpubDoc::new(&self.book_file_path);
+        let mut image_path_list = Vec::new();
 
         let mut epub = match doc {
             Ok(f) => f,
@@ -319,67 +363,42 @@ impl EpubTrait for Book {
             }
         };
 
-        let mut buf = Vec::new();
-        let mut image_path_list = Vec::new();
+        loop {
+            if let Ok(mime) =  epub.get_current_mime() {
+                
+                match mime.as_str() {
+                    
+                    "image/png" => epub.get_current_path().map_or((),|x| image_path_list.push(x)),
 
-        let target_name = b"image";
-        let target_name2 = b"xlink:href";
-        
-        for spine in epub.spine.clone() {
-            let res = epub.get_resource(&spine);
+                    "image/jpeg" => epub.get_current_path().map_or((),|x| image_path_list.push(x)),
+                    
+                    "application/xhtml+xml" => {
+                        if let Ok(bytes) = epub.get_current(){
+                            self.xml_get_image_path(bytes, &mut image_path_list).map_or((), |x| ()) 
+                        };
+                    },
+                    _ => {}
+                };
+            };
 
-            match res {
-                //xml
-                Ok(bytes) => {
-                    //xmlパースして画像パスを取得する
-                    let xml = str::from_utf8(&bytes)?;
-                    let mut reader = Reader::from_str(xml);
-                    reader.config_mut().expand_empty_elements = true;
-
-                        loop {
-                            let x = match reader.read_event_into(&mut buf) {
-                                Ok(Event::Eof) => break,
-                                Ok(Event::Start(e)) => e,
-                                _ => continue,
-                                };
-
-                                //イメージのパスを探す
-                                if x.name().local_name().as_ref() == target_name {
-                                    for attr in x.attributes() {
-                                        match attr {
-                                            Ok(attr) => {
-                                                if &attr.key.as_ref() == target_name2 {
-                                                    println!("FindImage: {:?}",str::from_utf8(&attr.value)?);
-                                                    image_path_list.push(str::from_utf8(&attr.value.into_owned())?.to_owned());
-                                                }
-                                            }
-                                            Err(e) => println!("Error: {:?}", e)
-                                        }
-                                    }
-                                }
-                                
-                            buf.clear();
-                        }
-                    }
-                    Err(e) => {
-                        return Err(anyhow!(e));
-                    }
-                }
-
+            
+            if epub.go_next().is_err() {
+                break;
             }
-
+        } 
+        
         if image_path_list.is_empty(){
             return Err(anyhow!("Epub内の画像パスが見つかりませんでした"));
         }
         
-        return Ok(image_path_list);
+        Ok(image_path_list)
     }
 
-    fn epub_to_archive_file(&self, image_path: Vec<String>, rzip: &mut ZipArchive<File>, wzip: &mut ZipWriter<File>) -> Result<(), anyhow::Error> {
+    fn epub_to_archive_file(&self, image_path: Vec<PathBuf>, rzip: &mut ZipArchive<File>, wzip: &mut ZipWriter<File>) -> Result<(), anyhow::Error> {
         let mut image_path = image_path.clone();
         let mut image_path_index = Vec::new();
-
-        for i in 0..(image_path.len() - 1) {
+        println!("{}", image_path.len());
+        for i in 0..(image_path.len()) {
             image_path_index.push(i);
         }
 
@@ -388,18 +407,23 @@ impl EpubTrait for Book {
             let zip_file_mangled_name = &zip_file.mangled_name();
             let zip_file_name = zip_file_mangled_name.file_name()
             .map_or("", |f| f.to_str().unwrap_or(""));
+           
 
-            for idx in 0..(image_path.len() - 1) {
+            for idx in 0..(image_path.len()) {
                 
-                let epub_path = Path::new(&image_path[idx]);
+                let epub_path = &image_path[idx];
+                match epub_path.file_name(){
+                    Some(_) => (),
+                    None => println!("fuck"),
+                };
                 let epub_file_name = epub_path.file_name()
                 .map_or("", |f| f.to_str().unwrap_or("")) ;
                 let epub_file_ext = epub_path.extension()
                 .map_or("", |f| f.to_str().unwrap_or("")) ;
                 
+
                 //ファイル名が一致した場合ZIPアーカイブに抽出する
                 if zip_file_name == epub_file_name{
-
                     //RAWコピー
                     let file_name = format!("{}.{}",image_path_index[idx] , epub_file_ext.to_string());
                     match wzip.raw_copy_file_rename(zip_file,&file_name){
