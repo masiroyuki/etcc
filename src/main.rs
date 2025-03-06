@@ -337,7 +337,6 @@ impl EpubTrait for Book {
                             match attr {
                                 Ok(attr) => {
                                     if &attr.key.as_ref() == target_name2 {
-                                        println!("FindImage: {:?}",str::from_utf8(&attr.value)?);
                                         image_path_list.push(Path::new(str::from_utf8(&attr.value.into_owned())?).to_path_buf());
                                     }
                                 }
@@ -397,7 +396,6 @@ impl EpubTrait for Book {
     fn epub_to_archive_file(&self, image_path: Vec<PathBuf>, rzip: &mut ZipArchive<File>, wzip: &mut ZipWriter<File>) -> Result<(), anyhow::Error> {
         let mut image_path = image_path.clone();
         let mut image_path_index = Vec::new();
-        println!("{}", image_path.len());
         for i in 0..(image_path.len()) {
             image_path_index.push(i);
         }
@@ -412,10 +410,6 @@ impl EpubTrait for Book {
             for idx in 0..(image_path.len()) {
                 
                 let epub_path = &image_path[idx];
-                match epub_path.file_name(){
-                    Some(_) => (),
-                    None => println!("fuck"),
-                };
                 let epub_file_name = epub_path.file_name()
                 .map_or("", |f| f.to_str().unwrap_or("")) ;
                 let epub_file_ext = epub_path.extension()
